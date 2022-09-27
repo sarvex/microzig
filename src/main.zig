@@ -1,4 +1,8 @@
 const std = @import("std");
+const Builder = std.build.Builder;
+const LibExeObjStep = std.build.LibExeObjStep;
+const Step = std.build.Step;
+const GeneratedFile = std.build.GeneratedFile;
 
 pub const LinkerScriptStep = @import("modules/LinkerScriptStep.zig");
 pub const boards = @import("modules/boards.zig");
@@ -7,8 +11,6 @@ pub const cpus = @import("modules/cpus.zig");
 pub const Board = @import("modules/Board.zig");
 pub const Chip = @import("modules/Chip.zig");
 pub const Cpu = @import("modules/Cpu.zig");
-
-const LibExeObjStep = std.build.LibExeObjStep;
 
 pub const Backing = union(enum) {
     board: Board,
@@ -28,15 +30,12 @@ fn root() []const u8 {
     return std.fs.path.dirname(@src().file) orelse unreachable;
 }
 
-pub const BuildOptions = struct {
-    // a hal package is a package with ergonomic wrappers for registers for a
-    // given mcu, it's only dependency can be microzig
-    hal_package_path: ?std.build.FileSource = null,
-};
+pub const BuildOptions = struct {};
 
 pub const EmbeddedExecutable = struct {
     inner: *LibExeObjStep,
     app_packages: std.ArrayList(Pkg),
+    microzig_pkg: *MicroZigPkg,
 
     pub fn addPackage(exe: *EmbeddedExecutable, pkg: Pkg) void {
         exe.app_packages.append(pkg) catch @panic("failed to append");
@@ -56,6 +55,15 @@ pub const EmbeddedExecutable = struct {
         });
     }
 
+    /// a HAL is a package who depends on microzig
+    pub fn addHalPackage(exe: *EmbeddedExecutable, name: []const u8, source: std.build.FileSource) void {
+        exe.addPackage(.{
+            .name = name,
+            .source = source,
+            .dependencies = &.{exe.microzig_pkg.toPackage()},
+        });
+    }
+
     pub fn setBuildMode(exe: *EmbeddedExecutable, mode: std.builtin.Mode) void {
         exe.inner.setBuildMode(mode);
     }
@@ -64,7 +72,11 @@ pub const EmbeddedExecutable = struct {
         exe.inner.install();
     }
 
-    pub fn installRaw(exe: *EmbeddedExecutable, dest_filename: []const u8, options: std.build.InstallRawStep.CreateOptions) *std.build.InstallRawStep {
+    pub fn installRaw(
+        exe: *EmbeddedExecutable,
+        dest_filename: []const u8,
+        options: std.build.InstallRawStep.CreateOptions,
+    ) *std.build.InstallRawStep {
         return exe.inner.installRaw(dest_filename, options);
     }
 
@@ -97,6 +109,7 @@ pub fn addEmbeddedExecutable(
     backing: Backing,
     options: BuildOptions,
 ) EmbeddedExecutable {
+    _ = options;
     const has_board = (backing == .board);
     const chip = switch (backing) {
         .chip => |c| c,
@@ -160,26 +173,31 @@ pub fn addEmbeddedExecutable(
     }
 
     const config_pkg = Pkg{
-        .name = "microzig-config",
-        .source = .{ .path = config_file_name },
+        .name = "config",
+        .source = .{ .path = builder.dupePath(config_file_name) },
     };
 
     const chip_pkg = Pkg{
         .name = "chip",
         .source = .{ .path = chip.path },
-        .dependencies = &.{pkgs.microzig},
+        .dependencies = &.{ config_pkg, pkgs.mmio },
     };
 
     const cpu_pkg = Pkg{
         .name = "cpu",
         .source = .{ .path = chip.cpu.path },
-        .dependencies = &.{pkgs.microzig},
+        .dependencies = &.{ chip_pkg, config_pkg, pkgs.mmio },
     };
 
     var exe = EmbeddedExecutable{
         .inner = builder.addExecutable(name, root_path ++ "core/microzig.zig"),
         .app_packages = std.ArrayList(Pkg).init(builder.allocator),
+        .microzig_pkg = MicroZigPkg.add(builder),
     };
+
+    exe.microzig_pkg.addPackage(config_pkg);
+    exe.microzig_pkg.addPackage(chip_pkg);
+    exe.microzig_pkg.addPackage(cpu_pkg);
 
     exe.inner.use_stage1 = true;
 
@@ -202,20 +220,12 @@ pub fn addEmbeddedExecutable(
     exe.inner.addPackage(chip_pkg);
     exe.inner.addPackage(cpu_pkg);
 
-    exe.inner.addPackage(.{
-        .name = "hal",
-        .source = if (options.hal_package_path) |hal_package_path|
-            hal_package_path
-        else .{ .path = root_path ++ "core/empty.zig" },
-        .dependencies = &.{pkgs.microzig},
-    });
-
     switch (backing) {
         .board => |board| {
-            exe.inner.addPackage(std.build.Pkg{
+            exe.microzig_pkg.addPackage(std.build.Pkg{
                 .name = "board",
                 .source = .{ .path = board.path },
-                .dependencies = &.{pkgs.microzig},
+                .dependencies = &.{ chip_pkg, cpu_pkg, config_pkg, pkgs.mmio },
             });
         },
         else => {},
@@ -225,20 +235,16 @@ pub fn addEmbeddedExecutable(
         .name = "app",
         .source = .{ .path = source },
     });
-    exe.addPackage(pkgs.microzig);
+    exe.microzig_pkg.addAsDependency(exe.inner);
+    exe.addPackage(exe.microzig_pkg.toPackage());
 
     return exe;
 }
 
 pub const pkgs = struct {
-    const mmio = std.build.Pkg{
-        .name = "microzig-mmio",
+    pub const mmio = std.build.Pkg{
+        .name = "mmio",
         .source = .{ .path = root_path ++ "core/mmio.zig" },
-    };
-
-    pub const microzig = std.build.Pkg{
-        .name = "microzig",
-        .source = .{ .path = root_path ++ "core/import-package.zig" },
     };
 };
 
@@ -255,4 +261,80 @@ pub const drivers = struct {
         .source = .{ .path = root_path ++ "drivers/button.zig" },
         .dependencies = &.{pkgs.microzig},
     };
+};
+
+pub const MicroZigPkg = struct {
+    step: Step,
+    generated_file: GeneratedFile,
+    allocator: std.mem.Allocator,
+    dependencies: std.ArrayList(Pkg),
+
+    pub fn add(b: *Builder) *MicroZigPkg {
+        var ret = b.allocator.create(MicroZigPkg) catch @panic("failed to allocate");
+        ret.* = .{
+            .step = Step.init(.custom, "microzig_pkg", b.allocator, make),
+            .generated_file = GeneratedFile{ .step = &ret.step },
+            .allocator = b.allocator,
+            .dependencies = std.ArrayList(Pkg).init(b.allocator),
+        };
+
+        return ret;
+    }
+
+    pub fn addPackage(self: *MicroZigPkg, pkg: Pkg) void {
+        self.dependencies.append(pkg) catch @panic("failed to append package");
+    }
+
+    pub fn toPackage(self: *MicroZigPkg) Pkg {
+        return Pkg{
+            .name = "microzig",
+            .source = .{ .generated = &self.generated_file },
+            .dependencies = self.dependencies.items,
+        };
+    }
+
+    pub fn addAsDependency(self: *MicroZigPkg, other: *LibExeObjStep) void {
+        other.addPackage(self.toPackage());
+        other.step.dependOn(&self.step);
+    }
+
+    fn make(step: *Step) !void {
+        const self = @fieldParentPtr(MicroZigPkg, "step", step);
+        var hasher = std.hash.SipHash128(1, 2).init("abcdefhijklmnopq");
+
+        // hash contents
+        for (self.dependencies.items) |dependency|
+            hasher.update(dependency.name);
+
+        var mac: [16]u8 = undefined;
+        hasher.final(&mac);
+
+        const filename = try std.fmt.allocPrint(self.allocator, "{}{s}", .{
+            std.fmt.fmtSliceHexLower(&mac),
+            ".zig",
+        });
+
+        const path = try std.fs.path.join(self.allocator, &.{
+            "zig-cache",
+            "microzig",
+            filename,
+        });
+
+        if (std.fs.cwd().access(path, .{})) {
+            // do nothing, assume existence means it was correctly generated
+        } else |_| {
+            try std.fs.cwd().makePath(std.fs.path.dirname(path).?);
+
+            const file = try std.fs.cwd().createFile(path, .{});
+            defer file.close();
+
+            for (self.dependencies.items) |dependency|
+                try file.writer().print("pub const {s} = @import(\"{s}\");\n", .{
+                    std.zig.fmtId(dependency.name),
+                    dependency.name,
+                });
+        }
+
+        self.generated_file.path = path;
+    }
 };
