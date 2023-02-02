@@ -69,39 +69,3 @@ pub const Pins = struct {
     tx: ?type = null,
     rx: ?type = null,
 };
-
-/// A UART configuration. The config defaults to the *8N1* setting, so "8 data bits, no parity, 1 stop bit" which is the
-/// most common serial format.
-pub const Config = struct {
-    /// TODO: Make this optional, to support STM32F303 et al. auto baud-rate detection?
-    baud_rate: u32,
-    stop_bits: StopBits = .one,
-    parity: ?Parity = null,
-    data_bits: DataBits = .eight,
-};
-
-// TODO: comptime verify that the enums are valid
-pub const DataBits = chip.uart.DataBits;
-pub const StopBits = chip.uart.StopBits;
-pub const Parity = chip.uart.Parity;
-
-pub const InitError = error{
-    UnsupportedWordSize,
-    UnsupportedParity,
-    UnsupportedStopBitCount,
-    UnsupportedBaudRate,
-};
-
-pub const ReadError = error{
-    /// The input buffer received a byte while the receive fifo is already full.
-    /// Devices with no fifo fill overrun as soon as a second byte arrives.
-    Overrun,
-    /// A byte with an invalid parity bit was received.
-    ParityError,
-    /// The stop bit of our byte was not valid.
-    FramingError,
-    /// The break interrupt error will happen when RXD is logic zero for
-    /// the duration of a full byte.
-    BreakInterrupt,
-};
-pub const WriteError = error{};
