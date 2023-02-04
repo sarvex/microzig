@@ -1,11 +1,7 @@
-pub fn AsyncResult(comptime E: type, comptime T: type) type {
-    if (@typeInfo(E) != .ErrorSet)
-        @ocmpileError("E must be an error set!");
-
+pub fn AsyncResult(comptime Tag: type) type {
     return struct {
         const Self = @This();
-        pub const Error = E;
-        pub const Type = T;
+        pub const TagType = Tag;
 
         is_completed: bool = false,
 
