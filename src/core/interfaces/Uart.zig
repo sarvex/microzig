@@ -25,13 +25,13 @@ pub fn configure(uart: Uart, config: Config) ConfigError!void {
 ///
 /// There can always be just one active transfer. Another call to `beginReceive()` or `beginSend()`
 /// when a transfer is already in progress will return `error.InProgress`!
-pub fn beginSend(uart: Uart, data: []const u8) BeginSendError!*const AsyncSendResult {
-    return uart.vtable.beginSendFn(uart.instance, data);
+pub fn beginSend(uart: Uart, data: []const u8, timeout: ?Timeout) BeginSendError!*const AsyncSendResult {
+    return uart.vtable.beginSendFn(uart.instance, data, timeout);
 }
 
 /// Finalizes a send operation. Pass in the `result` that was returned from a `beginSend()` call earlier.
 /// The `data` buffer is then unreferenced and can be invalidated.
-pub fn endSend(uart: Uart, result: *const AsyncSendResult) void {
+pub fn endSend(uart: Uart, result: *const AsyncSendResult) SendResult {
     return uart.vtable.endSendFn(uart.instance, result);
 }
 
@@ -41,8 +41,8 @@ pub fn endSend(uart: Uart, result: *const AsyncSendResult) void {
 ///
 /// There can always be just one active transfer. Another call to `beginReceive()` or `beginSend()`
 /// when a transfer is already in progress will return `error.InProgress`!
-pub fn beginReceive(uart: Uart, buffer: []u8) BeginReceiveError!*const AsyncReceiveResult {
-    return uart.vtable.beginReceiveFn(uart.instance, buffer);
+pub fn beginReceive(uart: Uart, buffer: []u8, timeout: ?Timeout) BeginReceiveError!*const AsyncReceiveResult {
+    return uart.vtable.beginReceiveFn(uart.instance, buffer, timeout);
 }
 
 /// Finalizes a receive operation. Pass in the `result` that was returned from a `beginReceive()` call earlier.
@@ -68,6 +68,39 @@ pub const Config = struct {
 
     /// Determines how many bits are transferred per word.
     data_bits: DataBits = .eight,
+
+    /// The control flow that is used for this communication.
+    control_flow: ControlFlow = .none,
+};
+
+pub const ControlFlow = union(enum) {
+    /// No control flow is performed.
+    none,
+
+    /// Using XON, XOFF symbols
+    software,
+
+    /// Using hardware control flow with RTS/CTS
+    hardware,
+
+    /// Using custom symbols for start/receive sending
+    custom_software: CustomSoftwareControlFlow,
+};
+
+pub const CustomSoftwareControlFlow = struct {
+    /// This byte is sent when the opposite site should stop sending data.
+    pause_request: u8,
+
+    /// This byte is sent when the opposite site can send data again.
+    resume_request: u8,
+};
+
+/// A timeout in microseconds composed of a constant and variable part.
+/// The total timeout is computed by `transferred_len * variable + constant`.
+/// This way, a generic timeout can be used for both short and long transfers.
+pub const Timeout = struct {
+    constant: u32,
+    variable: u32,
 };
 
 pub const ConfigError = error{
@@ -76,43 +109,56 @@ pub const ConfigError = error{
     UnsupportedStopBits,
     UnsupportedWordSize,
     UnsupportedParity,
+    UnsupportedControlFlow,
 };
 
 pub const BeginSendError = error{InProgress};
 pub const BeginReceiveError = error{InProgress};
 
-pub const ReceiveError = enum {
-    /// No error has happened during the transfer.
-    none,
+pub const SendError = error{
+    /// The transfer could not be completed in a predefined time span,
+    /// due to control flow preventing sending data.
+    Timeout,
+};
 
+pub const ReceiveError = error{
     /// The input buffer received a byte while the receive fifo is already full.
     /// Devices with no fifo fill overrun as soon as a second byte arrives.
-    buffer_overrun,
+    BufferOverrun,
 
     /// A byte with an invalid parity bit was received.
-    parity_error,
+    ParityError,
 
     /// The stop bit of our byte was not valid.
-    framing_error,
+    FramingError,
 
     /// The break interrupt error will happen when RXD is logic zero for
     /// the duration of a full transfer (start bit, data bits, parity, stop bits).
-    break_interrupt,
+    BreakInterrupt,
 
     /// The transfer could not be completed in a predefined time span.
-    timeout,
+    Timeout,
+};
+
+pub const SendResult = struct {
+    /// If not `.none`, an error happened during the transfer and cancelled
+    /// receiption.
+    @"error": ?SendError,
+
+    /// The number of bytes sent before `error` happened.
+    bytes_transferred: usize,
 };
 
 pub const ReceiveResult = struct {
     /// If not `.none`, an error happened during the transfer and cancelled
     /// receiption.
-    @"error": ReceiveError,
+    @"error": ?ReceiveError,
 
-    /// The number of bytes written before `error` happened.
-    bytes_received: usize,
+    /// The number of bytes received before `error` happened.
+    bytes_transferred: usize,
 };
 
-pub const AsyncSendResult = async_result.AsyncResult(opaque {});
+pub const AsyncSendResult = async_result.AsyncResult(SendResult);
 pub const AsyncReceiveResult = async_result.AsyncResult(ReceiveResult);
 
 /// Number of bits in a data word of the serial transmission.
@@ -160,10 +206,10 @@ pub const Parity = enum {
 pub const VTable = struct {
     configureFn: *const fn (*anyopaque, Config) ConfigError!void,
 
-    beginSendFn: *const fn (*anyopaque, data: []const u8) BeginSendError!*const AsyncSendResult,
-    endSendFn: *const fn (*anyopaque, result: *const AsyncSendResult) void,
+    beginSendFn: *const fn (*anyopaque, data: []const u8, ?Timeout) BeginSendError!*const AsyncSendResult,
+    endSendFn: *const fn (*anyopaque, result: *const AsyncSendResult) SendResult,
 
-    beginReceiveFn: *const fn (*anyopaque, []u8) BeginReceiveError!*const AsyncReceiveResult,
+    beginReceiveFn: *const fn (*anyopaque, []u8, ?Timeout) BeginReceiveError!*const AsyncReceiveResult,
     endReceiveFn: *const fn (*anyopaque, *const AsyncReceiveResult) ReceiveResult,
 
     /// Implements a VTable based on the given type. As long as the signatures
@@ -185,14 +231,14 @@ pub const VTable = struct {
             fn configureFn(erased_self: *anyopaque, cfg: Config) ConfigError!void {
                 return cast(erased_self).configure(cfg);
             }
-            fn beginSendFn(erased_self: *anyopaque, data: []const u8) BeginSendError!*const AsyncSendResult {
-                return cast(erased_self).beginSend(data);
+            fn beginSendFn(erased_self: *anyopaque, data: []const u8, timeout: ?Timeout) BeginSendError!*const AsyncSendResult {
+                return cast(erased_self).beginSend(data, timeout);
             }
-            fn endSendFn(erased_self: *anyopaque, result: *const AsyncSendResult) void {
+            fn endSendFn(erased_self: *anyopaque, result: *const AsyncSendResult) SendResult {
                 return cast(erased_self).endSend(result);
             }
-            fn beginReceiveFn(erased_self: *anyopaque, buffer: []u8) BeginReceiveError!*const AsyncReceiveResult {
-                return cast(erased_self).beginReceive(buffer);
+            fn beginReceiveFn(erased_self: *anyopaque, buffer: []u8, timeout: ?Timeout) BeginReceiveError!*const AsyncReceiveResult {
+                return cast(erased_self).beginReceive(buffer, timeout);
             }
             fn endReceiveFn(erased_self: *anyopaque, result: *const AsyncReceiveResult) ReceiveResult {
                 return cast(erased_self).endReceive(result);
@@ -223,9 +269,9 @@ pub fn verifyInterface(comptime T: type) void {
 
     const options = .{
         .{ .name = "configure", .sig = .{ null, Config }, .return_val = ConfigError!void },
-        .{ .name = "beginSend", .sig = .{ null, []const u8 }, .return_val = BeginSendError!*const AsyncSendResult },
-        .{ .name = "endSend", .sig = .{ null, *const AsyncSendResult }, .return_val = void },
-        .{ .name = "beginReceive", .sig = .{ null, []u8 }, .return_val = BeginReceiveError!*const AsyncReceiveResult },
+        .{ .name = "beginSend", .sig = .{ null, []const u8, ?Timeout }, .return_val = BeginSendError!*const AsyncSendResult },
+        .{ .name = "endSend", .sig = .{ null, *const AsyncSendResult }, .return_val = SendResult },
+        .{ .name = "beginReceive", .sig = .{ null, []u8, ?Timeout }, .return_val = BeginReceiveError!*const AsyncReceiveResult },
         .{ .name = "endReceive", .sig = .{ null, *const AsyncReceiveResult }, .return_val = ReceiveResult },
     };
     inline for (options) |kv| {
@@ -283,25 +329,31 @@ const TestImpl = struct {
         _ = config;
     }
 
-    pub fn beginSend(impl: TestImpl, data: []const u8) BeginSendError!*const AsyncSendResult {
+    pub fn beginSend(impl: TestImpl, data: []const u8, timeout: ?Timeout) BeginSendError!*const AsyncSendResult {
         _ = data;
+        _ = timeout;
         return &impl.send_result;
     }
 
-    pub fn endSend(impl: TestImpl, result: *const AsyncSendResult) void {
+    pub fn endSend(impl: TestImpl, result: *const AsyncSendResult) SendResult {
         std.debug.assert(&impl.send_result == result);
+        return SendResult{
+            .@"error" = error.Timeout,
+            .bytes_transferred = 0,
+        };
     }
 
-    pub fn beginReceive(impl: TestImpl, buffer: []u8) BeginReceiveError!*const AsyncReceiveResult {
+    pub fn beginReceive(impl: TestImpl, buffer: []u8, timeout: ?Timeout) BeginReceiveError!*const AsyncReceiveResult {
         _ = buffer;
+        _ = timeout;
         return &impl.receive_result;
     }
 
     pub fn endReceive(impl: TestImpl, result: *const AsyncReceiveResult) ReceiveResult {
         std.debug.assert(&impl.receive_result == result);
         return ReceiveResult{
-            .@"error" = .timeout,
-            .bytes_received = 0,
+            .@"error" = error.Timeout,
+            .bytes_transferred = 0,
         };
     }
 
