@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const async_result = @import("async_result.zig");
+const interface = @import("interface.zig");
 
 const Uart = @This();
 
@@ -218,119 +219,20 @@ pub const Parity = enum {
     odd,
 };
 
-pub const VTable = struct {
-    configureFn: *const fn (*anyopaque, Config) ConfigError!void,
+pub const Interface = interface.Interface(struct {
+    configure: fn (interface.Self, Config) ConfigError!void,
 
-    beginSendFn: *const fn (*anyopaque, data: []const u8, ?Timeout) BeginSendError!*const AsyncSendResult,
-    endSendFn: *const fn (*anyopaque, result: *const AsyncSendResult) SendResult,
+    beginSend: fn (interface.Self, data: []const u8, ?Timeout) BeginSendError!*const AsyncSendResult,
+    endSend: fn (interface.Self, result: *const AsyncSendResult) SendResult,
 
-    beginReceiveFn: *const fn (*anyopaque, []u8, ?Timeout) BeginReceiveError!*const AsyncReceiveResult,
-    endReceiveFn: *const fn (*anyopaque, *const AsyncReceiveResult) ReceiveResult,
+    beginReceive: fn (interface.Self, []u8, ?Timeout) BeginReceiveError!*const AsyncReceiveResult,
+    endReceive: fn (interface.Self, *const AsyncReceiveResult) ReceiveResult,
+});
 
-    /// Implements a VTable based on the given type. As long as the signatures
-    /// of the functions are matching, a vtable can be constructed.
-    pub fn get(comptime T: type) *const VTable {
-        const Implementation = struct {
-            const vtable = VTable{
-                .configureFn = configureFn,
-                .beginSendFn = beginSendFn,
-                .endSendFn = endSendFn,
-                .beginReceiveFn = beginReceiveFn,
-                .endReceiveFn = endReceiveFn,
-            };
-
-            fn cast(erased_self: *anyopaque) *T {
-                return @ptrCast(*T, @alignCast(@alignOf(T), erased_self));
-            }
-
-            fn configureFn(erased_self: *anyopaque, cfg: Config) ConfigError!void {
-                return cast(erased_self).configure(cfg);
-            }
-            fn beginSendFn(erased_self: *anyopaque, data: []const u8, timeout: ?Timeout) BeginSendError!*const AsyncSendResult {
-                return cast(erased_self).beginSend(data, timeout);
-            }
-            fn endSendFn(erased_self: *anyopaque, result: *const AsyncSendResult) SendResult {
-                return cast(erased_self).endSend(result);
-            }
-            fn beginReceiveFn(erased_self: *anyopaque, buffer: []u8, timeout: ?Timeout) BeginReceiveError!*const AsyncReceiveResult {
-                return cast(erased_self).beginReceive(buffer, timeout);
-            }
-            fn endReceiveFn(erased_self: *anyopaque, result: *const AsyncReceiveResult) ReceiveResult {
-                return cast(erased_self).endReceive(result);
-            }
-        };
-
-        return &Implementation.vtable;
-    }
-};
-
-/// Performs type verification of `T` if it matches the `Uart` interface.
-/// If `T` doesn't conform to the interface, a compile error is raised.
-///
-/// Call this function at `comptime` for each driver implementation of an `Uart`
-/// you create, so that new these drivers conform to the common interface.
-///
-/// Use this convenience snippet in your driver type to do that:
-/// ```zig
-/// comptime {
-///     verifyInterface(@This());
-/// }
-/// ```
-pub fn verifyInterface(comptime T: type) void {
-    const Interface = switch (@typeInfo(T)) {
-        .Struct, .Union, .Enum => T,
-        else => @compileError("The uart interface can only be implemented by a concrete struct, union or enum!"),
-    };
-
-    const options = .{
-        .{ .name = "configure", .sig = .{ null, Config }, .return_val = ConfigError!void },
-        .{ .name = "beginSend", .sig = .{ null, []const u8, ?Timeout }, .return_val = BeginSendError!*const AsyncSendResult },
-        .{ .name = "endSend", .sig = .{ null, *const AsyncSendResult }, .return_val = SendResult },
-        .{ .name = "beginReceive", .sig = .{ null, []u8, ?Timeout }, .return_val = BeginReceiveError!*const AsyncReceiveResult },
-        .{ .name = "endReceive", .sig = .{ null, *const AsyncReceiveResult }, .return_val = ReceiveResult },
-    };
-    inline for (options) |kv| {
-        if (!@hasDecl(Interface, kv.name)) {
-            @compileError(std.fmt.comptimePrint("missing function {s}", .{
-                kv.name,
-            }));
-        }
-
-        const info: std.builtin.Type.Fn = @typeInfo(@TypeOf(@field(Interface, kv.name))).Fn;
-        const ret: type = kv.return_val;
-        const sig: []const ?type = &kv.sig;
-
-        if (info.params.len != sig.len) {
-            @compileError(std.fmt.comptimePrint("parameter count mismatch for {s}: expected {} parameters, but provided function has {} parameters", .{
-                kv.name,
-                sig.len,
-                info.params.len,
-            }));
-        }
-        if (info.return_type != ret) {
-            @compileError(std.fmt.comptimePrint("return type mismatch for {s}: expected return type {s}, but provided function has return type {s}", .{
-                kv.name,
-                @typeName(ret),
-                @typeName(info.return_type orelse unreachable),
-            }));
-        }
-        inline for (sig) |item, i| {
-            if (@as(?type, item)) |param_type| {
-                if (info.params[i].type != param_type) {
-                    @compileError(std.fmt.comptimePrint("signature mismatch for {s}: parameter {} is expected to be of type {s}, but is type {s}", .{
-                        kv.name,
-                        i,
-                        @typeName(param_type),
-                        @typeName(info.params[i].type orelse unreachable),
-                    }));
-                }
-            }
-        }
-    }
-}
+pub const VTable = Interface.VTable;
 
 comptime {
-    verifyInterface(@This());
+    Interface.verify(@This());
 }
 
 const TestImpl = struct {
@@ -373,14 +275,14 @@ const TestImpl = struct {
     }
 
     comptime {
-        verifyInterface(@This());
+        Interface.verify(@This());
     }
 };
 
 test "verifyInterface" {
-    verifyInterface(TestImpl);
+    Interface.verify(TestImpl);
 }
 
 test "VTable.get" {
-    _ = VTable.get(TestImpl);
+    _ = Interface.constructVTable(TestImpl);
 }
