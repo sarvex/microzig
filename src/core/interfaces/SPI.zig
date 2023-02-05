@@ -3,34 +3,42 @@
 //!
 
 const std = @import("std");
-const async_result = @import("async_result.zig");
+const interface = @import("interface.zig");
 
 const SPI = @This();
 
-pub fn configure(spi: SPI, config: Config) !void {
-    //
+instance: *anyopaque,
+vtable: *const VTable,
+
+pub const ConfigError = error{InProgress};
+pub fn configure(spi: SPI, config: Config) ConfigError!void {
+    return spi.vtable.configure(spi.instance, config);
 }
 
-pub fn beginRead(spi: SPI, data: []u8, out_byte: u8) BeginTransferError!*const ReadAsyncResult {
-    //
-}
-pub fn endWrite(spi: SPI, transfer: *const ReadAsyncResult) void {
-    //
+pub const StartError = error{InProgress};
+pub fn start(spi: SPI, transfer: *Transfer) StartError!void {
+    return spi.vtable.start(spi.instance, transfer);
 }
 
-pub fn beginWrite(spi: SPI, data: []const u8) BeginTransferError!*const WriteAsyncResult {
-    //
-}
-pub fn endWrite(spi: SPI, transfer: *const WriteAsyncResult) void {
-    //
-}
+pub const TransferQueue = std.TailQueue(struct {});
+pub const Transfer = struct {
+    /// internal queuing of the data structure
+    node: TransferQueue.Node = .{ .data = .{} },
+    done: bool = false,
 
-pub fn beginBiDiTransfer(spi: SPI, out_data: []const u8, in_data: []const u8) BeginTransferError!*const BiDiAsyncResult {
-    //
-}
-pub fn endBiDiTransfer(spi: SPI, transfer: *const BiDiAsyncResult) void {
-    //
-}
+    next: ?*Transfer = null,
+
+    /// The buffer that contains the data that should be sent.
+    data_out: ?[]const u8,
+
+    /// The buffer that will receive the data that was read.
+    data_in: ?[]u8,
+
+    pub fn isCompleted(transfer: *const volatile Transfer) bool {
+        // needs volatile read as the transfer might be written from an interrupt
+        return transfer.done;
+    }
+};
 
 pub const Config = struct {
     frequency: u32 = 100_000,
@@ -54,10 +62,44 @@ pub const Mode = packed struct(u2) {
     pub const mode3 = Mode{ .clock_idle_polarity = .high, .clock_data_valid_edge = .trailing };
 };
 
-pub const BeginTransferError = error{
-    InProgress,
+pub const Interface = interface.Interface(struct {
+    configure: fn (interface.Self, config: Config) ConfigError!void,
+    start: fn (interface.Self, transfer: *Transfer) StartError!void,
+});
+
+pub const VTable = Interface.VTable;
+
+comptime {
+    Interface.verify(@This());
+}
+
+const TestImpl = struct {
+    const Self = @This();
+
+    pub fn configure(impl: TestImpl, config: Config) ConfigError!void {
+        _ = impl;
+        _ = config;
+    }
+
+    pub fn start(impl: TestImpl, transfer: *Transfer) StartError!void {
+        _ = impl;
+        _ = transfer;
+    }
+
+    comptime {
+        Interface.verify(@This());
+    }
 };
 
-pub const ReadAsyncResult = async_result.AsyncResult(opaque {});
-pub const WriteAsyncResult = async_result.AsyncResult(opaque {});
-pub const BiDiAsyncResult = async_result.AsyncResult(opaque {});
+test "verifyInterface" {
+    Interface.verify(TestImpl);
+}
+
+test "VTable.get" {
+    _ = Interface.constructVTable(TestImpl);
+}
+
+test "Interface" {
+    _ = SPI.configure;
+    _ = SPI.start;
+}

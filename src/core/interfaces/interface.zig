@@ -69,7 +69,10 @@ pub fn Interface(comptime Spec: type) type {
         pub fn constructVTable(comptime T: type) *const VTable {
             const Implementation = struct {
                 fn cast(erased_self: *anyopaque) *T {
-                    return @ptrCast(*T, @alignCast(@alignOf(T), erased_self));
+                    return @ptrCast(*T, if (@alignOf(T) == 0)
+                        erased_self
+                    else
+                        @alignCast(@alignOf(T), erased_self));
                 }
 
                 const vtable: VTable = blk: {
@@ -136,51 +139,46 @@ pub fn Interface(comptime Spec: type) type {
                 else => @compileError("The interface can only be implemented by a concrete struct, union or enum!"),
             }
 
-            // const options = .{
-            //     .{ .name = "configure", .sig = .{ null, Config }, .return_val = ConfigError!void },
-            //     .{ .name = "beginSend", .sig = .{ null, []const u8, ?Timeout }, .return_val = BeginSendError!*const AsyncSendResult },
-            //     .{ .name = "endSend", .sig = .{ null, *const AsyncSendResult }, .return_val = SendResult },
-            //     .{ .name = "beginReceive", .sig = .{ null, []u8, ?Timeout }, .return_val = BeginReceiveError!*const AsyncReceiveResult },
-            //     .{ .name = "endReceive", .sig = .{ null, *const AsyncReceiveResult }, .return_val = ReceiveResult },
-            // };
-            // inline for (options) |kv| {
-            //     if (!@hasDecl(T, kv.name)) {
-            //         @compileError(std.fmt.comptimePrint("missing function {s}", .{
-            //             kv.name,
-            //         }));
-            //     }
+            inline for (spec_fields) |fld| {
+                const expected_name = fld.name;
+                const expected_func = fld.type;
+                const expected_info: Type.Fn = @typeInfo(expected_func).Fn;
 
-            //     const info: std.builtin.Type.Fn = @typeInfo(@TypeOf(@field(T, kv.name))).Fn;
-            //     const ret: type = kv.return_val;
-            //     const sig: []const ?type = &kv.sig;
+                if (!@hasDecl(T, expected_name)) {
+                    @compileError(std.fmt.comptimePrint("missing function {s}", .{expected_name}));
+                }
 
-            //     if (info.params.len != sig.len) {
-            //         @compileError(std.fmt.comptimePrint("parameter count mismatch for {s}: expected {} parameters, but provided function has {} parameters", .{
-            //             kv.name,
-            //             sig.len,
-            //             info.params.len,
-            //         }));
-            //     }
-            //     if (info.return_type != ret) {
-            //         @compileError(std.fmt.comptimePrint("return type mismatch for {s}: expected return type {s}, but provided function has return type {s}", .{
-            //             kv.name,
-            //             @typeName(ret),
-            //             @typeName(info.return_type orelse unreachable),
-            //         }));
-            //     }
-            //     inline for (sig) |item, i| {
-            //         if (@as(?type, item)) |param_type| {
-            //             if (info.params[i].type != param_type) {
-            //                 @compileError(std.fmt.comptimePrint("signature mismatch for {s}: parameter {} is expected to be of type {s}, but is type {s}", .{
-            //                     kv.name,
-            //                     i,
-            //                     @typeName(param_type),
-            //                     @typeName(info.params[i].type orelse unreachable),
-            //                 }));
-            //             }
-            //         }
-            //     }
-            // }
+                const info: std.builtin.Type.Fn = @typeInfo(@TypeOf(@field(T, expected_name))).Fn;
+                const return_type: type = expected_info.return_type.?;
+
+                if (info.params.len != expected_info.params.len) {
+                    @compileError(std.fmt.comptimePrint("parameter count mismatch for {s}: expected {} parameters, but provided function has {} parameters", .{
+                        expected_name,
+                        expected_info.params.len,
+                        info.params.len,
+                    }));
+                }
+                if (info.return_type != return_type) {
+                    @compileError(std.fmt.comptimePrint("return type mismatch for {s}: expected return type {s}, but provided function has return type {s}", .{
+                        expected_name,
+                        @typeName(return_type),
+                        @typeName(info.return_type orelse unreachable),
+                    }));
+                }
+                inline for (expected_info.params) |item, i| {
+                    const param_type = item.type.?;
+                    if (param_type == Self)
+                        continue;
+                    if (info.params[i].type != param_type) {
+                        @compileError(std.fmt.comptimePrint("signature mismatch for {s}: parameter {} is expected to be of type {s}, but is type {s}", .{
+                            expected_name,
+                            i,
+                            @typeName(param_type),
+                            @typeName(info.params[i].type orelse unreachable),
+                        }));
+                    }
+                }
+            }
         }
     };
 }
