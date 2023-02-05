@@ -71,6 +71,13 @@ pub const Config = struct {
 
     /// The control flow that is used for this communication.
     control_flow: ControlFlow = .none,
+
+    /// The maximum acceptable error for the baud rate in permille. `configure()` will return an `error.BaudRatePrecision` when
+    /// the system clock is too imprecise to set the desired baud rate and the clock error will exceed this value.
+    ///
+    /// The default of two percent is chosen in a way that a regular 8N1 transfer is in a safe margin.
+    /// For an explanation of the default value, check out https://community.silabs.com/s/article/uart-rs232-required-clock-accuracy.
+    max_baud_error: u16 = 20, // 2%
 };
 
 pub const ControlFlow = union(enum) {
@@ -104,12 +111,20 @@ pub const Timeout = struct {
 };
 
 pub const ConfigError = error{
+    /// Configuration cannot be changed as an active transfer is still in progress.
+    /// Retry when no send or receive transfer is active.
     TransferInProgress,
-    UnsupportedBaudRate,
-    UnsupportedStopBits,
-    UnsupportedWordSize,
-    UnsupportedParity,
-    UnsupportedControlFlow,
+
+    /// The chosen baud rate is supported, but the system clock is too imprecise to
+    /// safely operate the uart, as the clock error rate exceeds `Config.max_baud_error`.
+    BaudRatePrecision,
+
+    AutoBaudNotSupported,
+    BaudRateNotSupported,
+    StopBitsNotSupported,
+    WordSizeNotSupported,
+    ParityNotSupported,
+    ControlFlowNotSupported,
 };
 
 pub const BeginSendError = error{InProgress};
