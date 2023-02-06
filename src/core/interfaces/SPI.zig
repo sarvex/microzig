@@ -10,6 +10,14 @@ const SPI = @This();
 instance: *anyopaque,
 vtable: *const VTable,
 
+pub fn new(ptr: anytype) SPI {
+    const info = @typeInfo(@TypeOf(ptr)).Pointer; // pass in single pointer
+    return SPI{
+        .instance = ptr,
+        .vtable = Interface.constructVTable(info.child),
+    };
+}
+
 pub const ConfigError = error{InProgress};
 pub fn configure(spi: SPI, config: Config) ConfigError!void {
     return spi.vtable.configure(spi.instance, config);

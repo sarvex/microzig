@@ -4,11 +4,20 @@
 
 const std = @import("std");
 const interface = @import("interface.zig");
+const Timeout = @import("Timeout.zig");
 
 const I2C = @This();
 
 instance: *anyopaque,
 vtable: *const VTable,
+
+pub fn new(ptr: anytype) I2C {
+    const info = @typeInfo(@TypeOf(ptr)).Pointer; // pass in single pointer
+    return I2C{
+        .instance = ptr,
+        .vtable = Interface.constructVTable(info.child),
+    };
+}
 
 pub const ConfigError = error{InProgress};
 pub fn configure(i2c: I2C, config: Config) ConfigError!void {
@@ -28,6 +37,11 @@ pub const Transfer = struct {
 
     next: ?*Transfer = null,
 
+    /// Timeout until this transfer fails. As clock stretching can happen,
+    /// an I²C transfer may be stretched indefinitely. Specifying a timeout
+    /// allows you to cancel the transfer when such a situation happens.
+    timeout: ?Timeout,
+
     /// The device that will be interfaced.
     device_address: u7,
 
@@ -35,10 +49,21 @@ pub const Transfer = struct {
     /// of the operation.
     data: TransferMode,
 
+    /// If not `.none`, an error happened during the transfer and cancelled
+    /// receiption.
+    @"error": ?TransferError,
+
+    /// The number of bytes received before `error` happened.
+    bytes_transferred: usize = 0,
+
     pub fn isCompleted(transfer: *const volatile Transfer) bool {
         // needs volatile read as the transfer might be written from an interrupt
         return transfer.done;
     }
+};
+
+pub const TransferError = error{
+    Timeout,
 };
 
 pub const TransferMode = union(enum) {

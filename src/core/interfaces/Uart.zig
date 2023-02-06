@@ -4,11 +4,20 @@
 
 const std = @import("std");
 const interface = @import("interface.zig");
+const Timeout = @import("Timeout.zig");
 
 const Uart = @This();
 
 instance: *anyopaque,
 vtable: *const VTable,
+
+pub fn new(ptr: anytype) Uart {
+    const info = @typeInfo(@TypeOf(ptr)).Pointer; // pass in single pointer
+    return Uart{
+        .instance = ptr,
+        .vtable = Interface.constructVTable(info.child),
+    };
+}
 
 /// Changes the configuration of the uart.
 pub fn configure(uart: Uart, config: Config) ConfigError!void {
@@ -33,6 +42,12 @@ pub const SendTransfer = struct {
 
     next: ?*SendTransfer = null,
 
+    /// Timeout until this transfer fails. As with control flow, the
+    /// transmission can be stopped for an indefinite amount of time.
+    /// Specifying a timeout allows you to cancel the transfer when
+    /// such a situation happens.
+    timeout: ?Timeout,
+
     /// The buffer that contains the data that should be transferred.
     data: []const u8,
 
@@ -41,7 +56,7 @@ pub const SendTransfer = struct {
     @"error": ?SendError,
 
     /// The number of bytes sent before `error` happened.
-    bytes_transferred: usize,
+    bytes_transferred: usize = 0,
 
     pub fn isCompleted(transfer: *const volatile SendTransfer) bool {
         // needs volatile read as the transfer might be written from an interrupt
@@ -57,6 +72,12 @@ pub const ReceiveTransfer = struct {
 
     next: ?*ReceiveTransfer = null,
 
+    /// Timeout until this transfer fails. As with control flow, the
+    /// transmission can be stopped for an indefinite amount of time.
+    /// Specifying a timeout allows you to cancel the transfer when
+    /// such a situation happens.
+    timeout: ?Timeout,
+
     /// The buffer where the received data should be stored.
     data: []u8,
 
@@ -65,7 +86,7 @@ pub const ReceiveTransfer = struct {
     @"error": ?ReceiveError,
 
     /// The number of bytes received before `error` happened.
-    bytes_transferred: usize,
+    bytes_transferred: usize = 0,
 
     pub fn isCompleted(transfer: *const volatile ReceiveTransfer) bool {
         // needs volatile read as the transfer might be written from an interrupt
@@ -121,14 +142,6 @@ pub const CustomSoftwareControlFlow = struct {
 
     /// This byte is sent when the opposite site can send data again.
     resume_request: u8,
-};
-
-/// A timeout in microseconds composed of a constant and variable part.
-/// The total timeout is computed by `transferred_len * variable + constant`.
-/// This way, a generic timeout can be used for both short and long transfers.
-pub const Timeout = struct {
-    constant: u32,
-    variable: u32,
 };
 
 pub const ConfigError = error{
