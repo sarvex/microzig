@@ -1,0 +1,31 @@
+
+
+   mcu_i2c:initialize
+=> tca9354_1:initialize VIA mcu_i2c 
+=> softi2c:initialize
+=> tca9354_2:initialize VIA softi2c VIA tca9354_1 VIA mcu_i2c
+=> softspi:initialize
+=> ssd1306:initialize   VIA softspi VIA tca9354_2 VIA softi2c VIA tca9354_1 VIA mcu_i2c
+
+ticking units:   softi2c, softspi
+interrupt units: mcu_i2c
+
+tca9354_2:SetPin
+  softspi:transfer
+    loop 1…8:
+      tca9354_2:setReg
+        softi2c:write
+          loop 1…8:
+            tca9354_1:setReg
+              mcu_i2c:write
+
+global tick subscribe/unsubscribe system
+
+global task chain?
+
+  => building linked lists of events?
+
+submit "send" task to root_i2c
+
+
+

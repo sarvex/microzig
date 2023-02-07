@@ -7,6 +7,13 @@ const std = @import("std");
 const root = @import("root");
 const builtin = @import("builtin");
 
+pub const interface = struct {
+    // pub const GPIO = @import("interfaces/GPIO.zig");
+    pub const I2C = @import("interfaces/I2C.zig");
+    pub const SPI = @import("interfaces/SPI.zig");
+    pub const Uart = @import("interfaces/Uart.zig");
+};
+
 /// The app that is currently built.
 pub const app = @import("app");
 
@@ -38,8 +45,8 @@ pub const Gpio = gpio.Gpio;
 pub const pin = @import("pin.zig");
 pub const Pin = pin.Pin;
 
-pub const uart = @import("uart.zig");
-pub const Uart = uart.Uart;
+// pub const uart = @import("uart.zig");
+// pub const Uart = uart.Uart;
 
 pub const spi = @import("spi.zig");
 pub const SpiBus = spi.SpiBus;

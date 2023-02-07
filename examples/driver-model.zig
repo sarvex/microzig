@@ -37,7 +37,7 @@ var display: Display128x64 = undefined;
 
 pub fn main() !void {
     // initialize the I²C hardware peripherial
-    try root_i2c.init(microzig.hal.pin("PC4"), microzig.hal.pin("PC5")); // PC4=>SDA, PC5=>SCL
+    try root_i2c.init(try microzig.hal.pin("PC4"), try microzig.hal.pin("PC5")); // PC4=>SDA, PC5=>SCL
 
     // Initialize first port expander with the hardware I²C,
     // this will also call configure() on the `root_i2c` object.
@@ -49,7 +49,7 @@ pub fn main() !void {
     // We're passing in the TCA9534 as a pointer instead of using the vtable interface
     // as we've specified above that we use a direct implementation instead of
     // using the generic virtual dispatch one.
-    try soft_i2c.init(&soft_i2c_root, soft_i2c_root.pin("P0"), soft_i2c_root.pin("P1"));
+    try soft_i2c.init(&soft_i2c_root, TCA9534.pin("P0"), TCA9534.pin("P1"));
 
     // Same game as above with `soft_i2c_root`, but this time, using the software bitbanged I²C
     // instead of the hardware one. The virtual dispatch here prevents us from instantiating the
@@ -57,10 +57,10 @@ pub fn main() !void {
     try soft_spi_root.init(microzig.interface.I2C.new(&soft_i2c));
 
     // same game as with the `soft_i2c` module, but for the software SPI.
-    try soft_spi.init(&soft_spi_root, soft_spi_root.pin("P3"), soft_spi_root.pin("P4"), soft_spi_root.pin("P5")); // P3=>SCK, P4=>MOSI, P5=>MISO
+    try soft_spi.init(&soft_spi_root, TCA9534.pin("P3"), TCA9534.pin("P4"), TCA9534.pin("P5")); // P3=>SCK, P4=>MOSI, P5=>MISO
 
     // Initialize the display on top of the software SPI.
-    try display.init(microzig.interface.SPI.new(&soft_spi), soft_spi_root.pin("P6")); // P6=>CS
+    try display.init(microzig.interface.SPI.new(&soft_spi), try soft_spi_root.pin("P6")); // P6=>CS
 
     // Set up some nice test image:
     try display.clear(.off);
@@ -71,6 +71,7 @@ pub fn main() !void {
     try display.setPixel(20, 19, .on);
 
     while (true) {
+        // Tick could maybe be implemented via a global "tick" system
         display.tick();
         soft_spi.tick();
         soft_spi_root.tick();

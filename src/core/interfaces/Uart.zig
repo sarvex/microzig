@@ -53,7 +53,7 @@ pub const SendTransfer = struct {
 
     /// If not `.none`, an error happened during the transfer and cancelled
     /// receiption.
-    @"error": ?SendError,
+    @"error": ?SendError = null,
 
     /// The number of bytes sent before `error` happened.
     bytes_transferred: usize = 0,
@@ -106,7 +106,7 @@ pub const Config = struct {
 
     /// Determines if an additional parity bit is transferred, and if os
     /// how the parity bit is computed.
-    parity: ?Parity = null,
+    parity: Parity = .none,
 
     /// Determines how many bits are transferred per word.
     data_bits: DataBits = .eight,

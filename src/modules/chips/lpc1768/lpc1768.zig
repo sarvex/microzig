@@ -87,50 +87,31 @@ pub const gpio = struct {
     }
 };
 
-pub const uart = struct {
-    pub const DataBits = enum(u2) {
-        five = 0,
-        six = 1,
-        seven = 2,
-        eight = 3,
-    };
+pub var uart0: Uart(0) = .{};
+pub var uart1: Uart(1) = .{};
+pub var uart2: Uart(2) = .{};
+pub var uart3: Uart(3) = .{};
 
-    pub const StopBits = enum(u1) {
-        one = 0,
-        two = 1,
-    };
-
-    pub const Parity = enum(u2) {
-        odd = 0,
-        even = 1,
-        mark = 2,
-        space = 3,
-    };
-
-    pub const CClkDiv = enum(u2) {
-        four = 0,
-        one = 1,
-        two = 2,
-        eight = 3,
-    };
-};
-
-pub fn Uart(comptime index: usize, comptime pins: micro.uart.Pins) type {
-    if (pins.tx != null or pins.rx != null)
-        @compileError("TODO: custom pins are not currently supported");
-
+pub fn Uart(comptime index: comptime_int) type {
     return struct {
-        const UARTn = switch (index) {
+        const Self = @This();
+        const Intf = micro.interface.Uart;
+
+        pub const registers = switch (index) {
             0 => regs.UART0,
             1 => regs.UART1,
             2 => regs.UART2,
             3 => regs.UART3,
             else => @compileError("LPC1768 has 4 UARTs available."),
         };
-        const Self = @This();
 
-        pub fn init(config: micro.uart.Config) !Self {
-            micro.debug.write("0");
+        send_transfer: ?*Intf.SendTransfer = null,
+        receive_transfer: ?*Intf.ReceiveTransfer = null,
+
+        pub fn init(uart: *Self, comptime pins: micro.uart.Pins) !void {
+            if (pins.tx != null or pins.rx != null)
+                @compileError("TODO: custom pins are not currently supported");
+
             switch (index) {
                 0 => {
                     regs.SYSCON.PCONP.modify(.{ .PCUART0 = 1 });
@@ -150,56 +131,133 @@ pub fn Uart(comptime index: usize, comptime pins: micro.uart.Pins) type {
                 },
                 else => unreachable,
             }
-            micro.debug.write("1");
+        }
 
-            UARTn.LCR.modify(.{
+        // pub const CClkDiv = enum(u2) {
+        //     four = 0,
+        //     one = 1,
+        //     two = 2,
+        //     eight = 3,
+        // };
+
+        pub fn configure(uart: Self, config: Intf.Config) Intf.ConfigError!void {
+            _ = uart;
+
+            registers.LCR.modify(.{
                 // 8N1
-                .WLS = @enumToInt(config.data_bits),
-                .SBS = @enumToInt(config.stop_bits),
-                .PE = if (config.parity != null) @as(u1, 1) else @as(u1, 0),
-                .PS = if (config.parity) |p| @enumToInt(p) else @enumToInt(uart.Parity.odd),
+                .WLS = switch (config.data_bits) {
+                    .five => @as(u2, 0),
+                    .six => @as(u2, 1),
+                    .seven => @as(u2, 2),
+                    .eight => @as(u2, 3),
+                },
+                .SBS = switch (config.stop_bits) {
+                    .one => @as(u1, 0),
+                    .two => @as(u1, 1),
+                    else => return error.StopBitsNotSupported,
+                },
+                .PE = if (config.parity != .none) @as(u1, 1) else @as(u1, 0),
+                .PS = switch (config.parity) {
+                    .none => @as(u2, 0),
+                    .odd => @as(u2, 0),
+                    .even => @as(u2, 1),
+                    .mark => @as(u2, 2),
+                    .space => @as(u2, 3),
+                },
                 .BC = 0,
                 .DLAB = 1,
             });
-            micro.debug.write("2");
 
             // TODO: UARTN_FIFOS_ARE_DISA is not available in all uarts
             //UARTn.FCR.modify(.{ .FIFOEN = .UARTN_FIFOS_ARE_DISA });
 
-            micro.debug.writer().print("clock: {} baud: {} ", .{
+            micro.debug.writer().print("clock: {} baud: {?} ", .{
                 micro.clock.get().cpu,
                 config.baud_rate,
             }) catch {};
 
-            const pclk = micro.clock.get().cpu / 4;
-            const divider = (pclk / (16 * config.baud_rate));
+            if (config.baud_rate) |baud_rate| {
+                const pclk = micro.clock.get().cpu / 4;
+                const divider = (pclk / (16 * baud_rate));
 
-            const regval = std.math.cast(u16, divider) orelse return error.UnsupportedBaudRate;
+                const regval = std.math.cast(u16, divider) orelse return error.BaudRateNotSupported;
 
-            UARTn.DLL.modify(.{ .DLLSB = @truncate(u8, regval >> 0x00) });
-            UARTn.DLM.modify(.{ .DLMSB = @truncate(u8, regval >> 0x08) });
+                registers.DLL.modify(.{ .DLLSB = @truncate(u8, regval >> 0x00) });
+                registers.DLM.modify(.{ .DLMSB = @truncate(u8, regval >> 0x08) });
 
-            UARTn.LCR.modify(.{ .DLAB = 0 });
+                registers.LCR.modify(.{ .DLAB = 0 });
+            } else {
+                // TODO: Implement auto-bauding.
+                return error.AutoBaudNotSupported;
+            }
+        }
 
-            return Self{};
+        pub fn send(uart: *Self, transfer: *Intf.SendTransfer) Intf.BeginSendError!void {
+            if (uart.send_transfer != null)
+                return error.InProgress;
+
+            transfer.bytes_transferred = 0;
+            transfer.@"error" = null;
+            uart.send_transfer = transfer;
+        }
+
+        pub fn receive(uart: *Self, transfer: *Intf.ReceiveTransfer) Intf.BeginReceiveError!void {
+            if (uart.receive_transfer != null)
+                return error.InProgress;
+
+            transfer.bytes_transferred = 0;
+            transfer.@"error" = null;
+            uart.receive_transfer = transfer;
+        }
+
+        pub fn tick(uart: *Self) void {
+            if (uart.send_transfer) |transfer| {
+                if (uart.canWrite()) {
+                    uart.tx(transfer.data[transfer.bytes_transferred]);
+                    transfer.bytes_transferred += 1;
+
+                    if (transfer.bytes_transferred >= transfer.data.len) {
+                        transfer.done = true;
+                        uart.send_transfer = null;
+                    }
+                }
+            }
+
+            if (uart.receive_transfer) |transfer| {
+                if (uart.canRead()) {
+                    transfer.data[transfer.bytes_transferred] = uart.rx();
+                    transfer.bytes_transferred += 1;
+
+                    if (transfer.bytes_transferred >= transfer.data.len) {
+                        transfer.done = true;
+                        uart.receive_transfer = null;
+                    }
+                }
+            }
         }
 
         pub fn canWrite(self: Self) bool {
             _ = self;
-            return (UARTn.LSR.read().THRE == 1);
+            return (registers.LSR.read().THRE == 1);
         }
+
         pub fn tx(self: Self, ch: u8) void {
             while (!self.canWrite()) {} // Wait for Previous transmission
-            UARTn.THR.raw = ch; // Load the data to be transmitted
+            registers.THR.raw = ch; // Load the data to be transmitted
         }
 
         pub fn canRead(self: Self) bool {
             _ = self;
-            return (UARTn.LSR.read().RDR == 1);
+            return (registers.LSR.read().RDR == 1);
         }
+
         pub fn rx(self: Self) u8 {
             while (!self.canRead()) {} // Wait till the data is received
-            return UARTn.RBR.read().RBR; // Read received data
+            return registers.RBR.read().RBR; // Read received data
+        }
+
+        comptime {
+            micro.interface.Uart.Interface.verify(@This());
         }
     };
 }

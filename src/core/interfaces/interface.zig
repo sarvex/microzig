@@ -152,10 +152,11 @@ pub fn Interface(comptime Spec: type) type {
                 const return_type: type = expected_info.return_type.?;
 
                 if (info.params.len != expected_info.params.len) {
-                    @compileError(std.fmt.comptimePrint("parameter count mismatch for {s}: expected {} parameters, but provided function has {} parameters", .{
+                    @compileError(std.fmt.comptimePrint("parameter count mismatch for {s}: expected {} parameters, but provided function has {} parameters. Expected signature is {}", .{
                         expected_name,
                         expected_info.params.len,
                         info.params.len,
+                        expected_func,
                     }));
                 }
                 if (info.return_type != return_type) {
