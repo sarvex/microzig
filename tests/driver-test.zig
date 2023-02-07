@@ -1,3 +1,4 @@
+const std = @import("std");
 const micro = @import("microzig");
 
 const uart_instance = &micro.chip.uart0;
@@ -15,7 +16,31 @@ pub fn main() !void {
     };
     try uart_ptr.send(&transfer);
 
+    var buffer: [1]u8 = undefined;
+    var inbound = micro.interface.Uart.ReceiveTransfer{
+        .data = &buffer,
+        .timeout = null,
+    };
+    try uart_ptr.receive(&inbound);
+
     while (true) {
+        if (inbound.done) {
+            const received_data = inbound.data[0..inbound.bytes_transferred];
+
+            // TODO: Process received_data
+            if (received_data.len > 0) {
+                std.log.info("UART received the following data: '{}'", .{std.fmt.fmtSliceEscapeUpper(received_data)});
+            }
+
+            // we received data from the UART.
+            if (inbound.@"error") |err| {
+                std.log.err("UART failed during reception of data: {s}", .{@errorName(err)});
+            }
+
+            // Just reschedule our task
+            try uart_ptr.receive(&inbound);
+        }
+
         uart_instance.tick();
     }
 }

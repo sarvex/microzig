@@ -83,7 +83,7 @@ pub const ReceiveTransfer = struct {
 
     /// If not `.none`, an error happened during the transfer and cancelled
     /// receiption.
-    @"error": ?ReceiveError,
+    @"error": ?ReceiveError = null,
 
     /// The number of bytes received before `error` happened.
     bytes_transferred: usize = 0,
