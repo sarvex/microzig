@@ -1,8 +1,25 @@
 = MicroZig Design
-
 :toc: macro
 
 == CPUs
+
+[mermaid]
+....
+graph TD;
+    A-->B;
+    A-->C;
+    B-->D;
+    C-->D;
+....
+
+[dot]
+....
+strict graph {
+  a -- b
+  a -- b
+  b -- a [color=blue]
+}
+....
 
 == Chips
 
