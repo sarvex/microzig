@@ -17,21 +17,40 @@ There will be issues marked as `good first issue`, or drafts for larger ideas th
 
 == Introduction
 
-This repo contains the infrastructure for getting started in an embedded Zig project, as well as some code to interact with some chips/boards.
+This repo contains the infrastructure for getting started in an embedded Zig project, it "gets you to main()".
 Specifically it offers:
 
 * a single easy-to-use builder function that:
 ** generates your linker script
-** sets up packages and start code
+** sets up packages and startup code
 * generalized interfaces for common devices, such as UART.
 * device drivers for interacting with external hardware
 * an uncomplicated method to define xref:interrupts[interrupts]
 
-== How to
+== Interrupts
 
-Here's a number of things you might be interested in doing, and how to achieve them with microzig and other ZEG tools.
+The current supported architectures for interrupt vector generation are ARM and AVR.
+To define the Interrupt Service Routine (ISR) for a given interrupt, you create a function with the same name in an `interrupts` namespace:
 
-=== Embedded project with "supported" chip/board
+[source,zig]
+----
+pub const interrupts = struct {
+    pub fn PCINT0() void {
+      // interrupt handling code
+    }
+};
+
+pub fn main() !void {
+    // my application
+}
+----
+
+We're using compile-time checks along with the generated code to determine the list of interrupts.
+If a function is defined whose name is not in this list, you'll get a compiler error with the list of interrupts/valid names.
+
+== Does MicroZig support X hardware?
+
+MicroZig is designed to cover as wide 
 
 Start with an empty Zig project by running `zig init-exe`, and add microzig as a git submodule (or your choice of package manager).
 Then in your `build.zig`:
@@ -84,7 +103,7 @@ pub fn main() !void {
 }
 ----
 
-=== Embedded project with "unsupported" chip
+== No one has written Zig for my particular hardware, how do I get started?
 
 If you have a board/chip that isn't defined in microzig, you can set it up yourself!
 You need to have:
@@ -116,23 +135,4 @@ const backing = .{
 `regz` is also still in development, and while it tends to generate code well, it's possible that there will be errors in the generated code!
 Please create an issue if you run into anything fishy.
 
-=== Interrupts
 
-The current supported architectures for interrupt vector generation are ARM and AVR.
-To define the Interrupt Service Routine (ISR) for a given interrupt, you create a function with the same name in an `interrupts` namespace:
-
-[source,zig]
-----
-pub const interrupts = struct {
-    pub fn PCINT0() void {
-      // interrupt handling code
-    }
-};
-
-pub fn main() !void {
-    // my application
-}
-----
-
-We're using compile-time checks along with the generated code to determine the list of interrupts.
-If a function is defined whose name is not in this list, you'll get a compiler error with the list of interrupts/valid names.
