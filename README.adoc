@@ -27,6 +27,9 @@ Specifically it offers:
 * device drivers for interacting with external hardware
 * an uncomplicated method to define xref:interrupts[interrupts]
 
+If you're interested in how MicroZig works internally please see the xref:docs/design.adoc[Design Document].
+
+
 == Interrupts
 
 The current supported architectures for interrupt vector generation are ARM and AVR.
